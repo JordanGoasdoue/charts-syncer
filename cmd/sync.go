@@ -49,14 +49,15 @@ func initConfigFile() error {
 	viper.AddConfigPath(".")
 	viper.SetConfigName(defaultCfgFile)
 	viper.SetConfigType("yaml")
+
 	klog.Infof("Looking for the default config %s", defaultCfgFile)
 	return errors.Trace(viper.ReadInConfig())
 }
 
 func newSyncCmd() *cobra.Command {
 	var c api.Config
-
 	usePlainLog := false
+
 	cmd := &cobra.Command{
 		Use:           "sync",
 		Short:         "Synchronizes two chart repositories",
@@ -68,6 +69,7 @@ func newSyncCmd() *cobra.Command {
 				_ = cmd.Flags().Lookup("alsologtostderr").Value.Set("false")
 				_ = cmd.Flags().Lookup("logtostderr").Value.Set("false")
 			}
+
 			if err := initConfigFile(); err != nil {
 				return errors.Trace(err)
 			}
@@ -90,11 +92,13 @@ func newSyncCmd() *cobra.Command {
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var parentLog log.SectionLogger
+
 			if usePlainLog {
 				parentLog = klogLogger.NewKlogSectionLogger()
 			} else {
 				parentLog = pterm.NewSectionLogger()
 			}
+
 			l := parentLog.StartSection("Syncing charts")
 
 			syncerOptions := []syncer.Option{
@@ -110,20 +114,76 @@ func newSyncCmd() *cobra.Command {
 				syncer.WithSkipImages(c.GetSkipImages()),
 				syncer.WithSkipCharts(c.SkipCharts),
 				syncer.WithUsePlainHTTP(usePlainHTTP),
-
 				syncer.WithLogger(l),
 			}
+
+			// Add cherry picked charts option if available
+			if len(c.GetCherryPickedCharts()) > 0 {
+				syncerOptions = append(syncerOptions, syncer.WithCherryPickedCharts(c.GetCherryPickedCharts()))
+			}
+
 			s, err := syncer.New(c.GetSource(), c.GetTarget(), syncerOptions...)
 			if err != nil {
 				return errors.Trace(err)
 			}
-			if err := s.SyncPendingCharts(c.GetCharts()...); err != nil {
-				if err == syncer.ErrNoChartsToSync {
-					parentLog.Successf("There are no charts out of sync!")
-					return nil
+
+			// Handle both regular charts and cherry picked charts
+			hasRegularCharts := len(c.GetCharts()) > 0
+			hasCherryPickedCharts := len(c.GetCherryPickedCharts()) > 0
+
+			var syncError error
+
+			// Create a map of cherry picked chart names for conflict detection
+			cherryPickedNames := make(map[string]bool)
+			if hasCherryPickedCharts {
+				for _, chart := range c.GetCherryPickedCharts() {
+					cherryPickedNames[chart.Name] = true
 				}
-				return l.Failf("Error syncing charts: %v", err)
 			}
+
+			// Sync regular charts if any, but exclude those that are in cherry picked
+			if hasRegularCharts {
+				var filteredCharts []string
+				for _, chart := range c.GetCharts() {
+					// Only include regular charts that are NOT in cherry picked list
+					if !cherryPickedNames[chart] {
+						filteredCharts = append(filteredCharts, chart)
+					} else {
+						l.Infof("Skipping regular chart '%s' because it's defined in cherry picked charts", chart)
+					}
+				}
+
+				if len(filteredCharts) > 0 {
+					l.Infof("Syncing %d regular charts (excluding cherry picked conflicts)", len(filteredCharts))
+					if err := s.SyncPendingCharts(filteredCharts...); err != nil {
+						if err != syncer.ErrNoChartsToSync {
+							syncError = err
+						}
+					}
+				}
+			}
+
+			// Sync cherry picked charts if any (these always take priority)
+			if hasCherryPickedCharts && syncError == nil {
+				l.Infof("Syncing %d cherry picked charts", len(c.GetCherryPickedCharts()))
+				if err := s.SyncCherryPickedCharts(); err != nil {
+					if err != syncer.ErrNoChartsToSync {
+						syncError = err
+					}
+				}
+			}
+
+			// Handle the final result
+			if syncError != nil {
+				return l.Failf("Error syncing charts: %v", syncError)
+			}
+
+			// Check if anything was actually synced
+			if !hasRegularCharts && !hasCherryPickedCharts {
+				parentLog.Successf("There are no charts out of sync!")
+				return nil
+			}
+
 			parentLog.Successf("Charts synced successfully")
 			return nil
 		},

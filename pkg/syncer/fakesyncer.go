@@ -15,8 +15,9 @@ import (
 
 // FakeSyncerOpts allows to configure a Fake syncer.
 type FakeSyncerOpts struct {
-	Destination string
-	skipCharts  []string
+	Destination        string
+	skipCharts         []string
+	cherryPickedCharts []*api.CherryPickedChart
 }
 
 // FakeSyncerOption is an option value used to create a new fake syncer instance.
@@ -26,6 +27,13 @@ type FakeSyncerOption func(*FakeSyncerOpts)
 func WithFakeSyncerDestination(dir string) FakeSyncerOption {
 	return func(s *FakeSyncerOpts) {
 		s.Destination = dir
+	}
+}
+
+// WithFakeSyncerCherryPickedCharts configures the fake syncer with cherry picked charts
+func WithFakeSyncerCherryPickedCharts(charts []*api.CherryPickedChart) FakeSyncerOption {
+	return func(s *FakeSyncerOpts) {
+		s.cherryPickedCharts = charts
 	}
 }
 

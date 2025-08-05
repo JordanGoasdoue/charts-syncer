@@ -22,3 +22,14 @@ charts:
   - {{ . }}
 {{- end }}
 {{- end }}
+
+{{ if .CherryPickedCharts -}}
+cherry_picked_charts:
+{{- range .CherryPickedCharts }}
+  - name: "{{ .Name }}"
+    versions:
+{{- range .Versions }}
+      - "{{ . }}"
+{{- end }}
+{{- end }}
+{{- end }}

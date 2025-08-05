@@ -25,6 +25,7 @@ var (
 		},
 		DisableChartsIndex: true,
 	}
+
 	ociTargetRepo = &api.Repo{
 		Kind: api.Kind_OCI,
 		Auth: &api.Auth{
@@ -35,6 +36,11 @@ var (
 	}
 )
 
+type CherryPickedChart struct {
+	Name     string
+	Versions []string
+}
+
 func TestSync(t *testing.T) {
 	charts := map[string]string{
 		"apache":    "7.3.15",
@@ -42,15 +48,40 @@ func TestSync(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name         string
-		chartsToSync []string
-		twice        bool
+		name               string
+		chartsToSync       []string
+		cherryPickedCharts []CherryPickedChart
+		twice              bool
 	}{
 		{name: "SyncNoneReturnsNothingToSync", chartsToSync: []string{}, twice: false},
 		{name: "SyncAllChartsOnceSyncs", chartsToSync: []string{"apache", "zookeeper"}, twice: false},
 		{name: "SyncAllChartsTwiceSyncsAndReturnsNothingToSync", chartsToSync: []string{"apache", "zookeeper"}, twice: true},
 		{name: "SyncSelectedChartsOnceSyncsSelectedCharts", chartsToSync: []string{"apache"}, twice: false},
 		{name: "SyncSelectedChartsTwiceSyncsSelectedChartsAndReturnsNothingToSync", chartsToSync: []string{"zookeeper"}, twice: true},
+		{
+			name:         "SyncCherryPickedChartsOnlySpecificVersions",
+			chartsToSync: []string{},
+			cherryPickedCharts: []CherryPickedChart{
+				{Name: "apache", Versions: []string{"7.3.15"}},
+			},
+			twice: false,
+		},
+		{
+			name:         "SyncCherryPickedChartsTwiceReturnsNothingToSync",
+			chartsToSync: []string{},
+			cherryPickedCharts: []CherryPickedChart{
+				{Name: "zookeeper", Versions: []string{"5.14.3"}},
+			},
+			twice: true,
+		},
+		{
+			name:         "SyncMixedChartsAndCherryPicked",
+			chartsToSync: []string{"apache"},
+			cherryPickedCharts: []CherryPickedChart{
+				{Name: "zookeeper", Versions: []string{"5.14.3"}},
+			},
+			twice: false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -59,24 +90,38 @@ func TestSync(t *testing.T) {
 			oci.PrepareOCIServer(context.Background(), t, ociTargetRepo)
 			ct := oci.PrepareTest(t, ociTargetRepo)
 
-			cfg, err := renderConfigFile("../testdata/sync-test.tmpl.yaml", tc.chartsToSync...)
+			cfg, err := renderConfigFile("../testdata/sync-test.tmpl.yaml", tc.chartsToSync, tc.cherryPickedCharts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { os.Remove(cfg) })
 
 			args := []string{"sync", "--use-plain-log", "--use-plain-http", "--config", cfg}
-			if len(tc.chartsToSync) > 0 {
+
+			if len(tc.chartsToSync) > 0 || len(tc.cherryPickedCharts) > 0 {
 				chartsyncer(args...).AssertSuccessMatchStderr(t, "Charts synced successfully")
 			} else {
 				chartsyncer(args...).AssertSuccessMatchStderr(t, "There are no charts out of sync!")
 			}
 
+			// Verify regular charts
 			for k, v := range charts {
 				if slices.Contains(tc.chartsToSync, k) {
 					assert.NoError(t, verifyChart(ct, k, v))
 				} else {
-					assert.Error(t, verifyChart(ct, k, v))
+					// Check if this chart is in cherry picked charts
+					foundInCherryPicked := false
+					for _, cherryChart := range tc.cherryPickedCharts {
+						if cherryChart.Name == k && slices.Contains(cherryChart.Versions, v) {
+							foundInCherryPicked = true
+							break
+						}
+					}
+					if foundInCherryPicked {
+						assert.NoError(t, verifyChart(ct, k, v))
+					} else {
+						assert.Error(t, verifyChart(ct, k, v))
+					}
 				}
 			}
 
@@ -104,6 +149,7 @@ func prepareSourceRepo(_ context.Context, t *testing.T) {
 			Name:    c.Name,
 			Version: c.Version,
 		}
+
 		// Upload chart to source repo
 		chartPath := fmt.Sprintf("../testdata/%s-%s.tgz", c.Name, c.Version)
 		if err := cs.Upload(chartPath, chartMetadata); err != nil {
@@ -135,17 +181,18 @@ func verifyChart(repo *oci.Repo, name, version string) error {
 	return nil
 }
 
-func renderConfigFile(tmpl string, charts ...string) (string, error) {
+func renderConfigFile(tmpl string, charts []string, cherryPickedCharts []CherryPickedChart) (string, error) {
 	templateData := struct {
-		SourceURL      string
-		SourceUser     string
-		SourcePassword string
-		SourceIndex    bool
-		TargetURL      string
-		TargetUser     string
-		TargetPassword string
-		TargetIndex    bool
-		Charts         []string
+		SourceURL          string
+		SourceUser         string
+		SourcePassword     string
+		SourceIndex        bool
+		TargetURL          string
+		TargetUser         string
+		TargetPassword     string
+		TargetIndex        bool
+		Charts             []string
+		CherryPickedCharts []CherryPickedChart
 	}{
 		ociSourceRepo.Url,
 		ociSourceRepo.Auth.Username,
@@ -156,6 +203,7 @@ func renderConfigFile(tmpl string, charts ...string) (string, error) {
 		ociTargetRepo.Auth.Password,
 		ociTargetRepo.DisableChartsIndex,
 		charts,
+		cherryPickedCharts,
 	}
 
 	f, err := os.CreateTemp("", "charts-syncer-*.yaml")

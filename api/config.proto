@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package api;
+
 option go_package = "github.com/bitnami/charts-syncer/api;api";
 
 // Config file structure
@@ -17,13 +18,19 @@ message Config {
     bool skip_artifacts = 6;
     // Do not sync chart images
     bool skip_images = 7;
+    // Cherry-picked charts with specific versions
+    repeated CherryPickedChart cherry_picked_charts = 8;
+}
+
+// CherryPickedChart represents a chart with its versions
+message CherryPickedChart {
+    string name = 1;
+    repeated string versions = 2;
 }
 
 // SourceRepo contains the required information of the source chart repository
 message Source {
     Repo repo = 1;
-    
-
     // Ignored if the repo is an intermediate bundle since the images are inside the bundle
     Containers containers = 2;
 }
@@ -31,6 +38,7 @@ message Source {
 message Containers {
     ContainerAuth auth = 1;
     string url = 2;
+    
     // ContainerAuth defines the authentication parameters required to access the source/target
     // OCI registries
     message ContainerAuth {
@@ -43,7 +51,6 @@ message Containers {
 // TargetRepo contains the required information of the target chart repository
 message Target {
     Repo repo = 1;
-
     Containers containers = 2;
 }
 
@@ -61,7 +68,6 @@ message Repo {
     bool use_charts_index = 6 [deprecated=true];
     bool disable_charts_index = 7;
 }
-
 
 // Auth contains credentials to login to a chart repository
 message Auth {

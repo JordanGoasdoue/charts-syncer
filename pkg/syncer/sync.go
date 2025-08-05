@@ -76,11 +76,27 @@ func (s *Syncer) SyncPendingCharts(names ...string) error {
 		s.logger.Infof("Chart list loaded")
 	}
 
-	charts := make([]*Chart, len(s.getIndex()))
-	i := 0
-	for _, ch := range s.getIndex() {
-		charts[i] = ch
-		i++
+	// FIX: Only get charts that match the requested names
+	var charts []*Chart
+	index := s.getIndex()
+
+	if len(names) == 0 {
+		// If no specific names requested, sync all charts (backward compatibility)
+		for _, ch := range index {
+			charts = append(charts, ch)
+		}
+	} else {
+		// Only sync the requested charts
+		nameSet := make(map[string]bool)
+		for _, name := range names {
+			nameSet[name] = true
+		}
+
+		for _, ch := range index {
+			if nameSet[ch.Name] {
+				charts = append(charts, ch)
+			}
+		}
 	}
 
 	var msg string
@@ -104,5 +120,6 @@ func (s *Syncer) SyncPendingCharts(names ...string) error {
 			errs = goerrors.Join(errs, errors.Trace(err))
 		}
 	}
+
 	return errors.Trace(errs)
 }
